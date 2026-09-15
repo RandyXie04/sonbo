@@ -28,11 +28,15 @@ jobs:
       run: |
         .\build_exe.bat
 
+    - name: Zip Release
+      run: |
+        Compress-Archive -Path dist\PDF_Toolkit -DestinationPath PDF_Toolkit.zip
+
     - name: Create Release
       uses: softprops/action-gh-release@v1
       with:
         files: |
-          dist/PDF_Toolkit/PDF_Toolkit.exe
+          PDF_Toolkit.zip
         generate_release_notes: true
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
