@@ -106,7 +106,6 @@ def main():
         try:
             from src.scripts import process_ocr
             # 優先嘗試透過 module import 執行
-            import argparse
             ocr_args = argparse.Namespace(
                 file=args.file,
                 output_dir=args.output_dir,

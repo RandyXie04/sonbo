@@ -357,14 +357,15 @@ def generate_audit_report(pdf_name, total_pages, audit_records, report_path):
         f.write("\n".join(lines))
 
 
-def main():
+def main(args=None):
     import argparse
     import json
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--file", type=str, help="Specific PDF file to process")
-    parser.add_argument("--output_dir", type=str, default=str(PATHS.root / "data" / "03_output"), help="Output directory")
-    parser.add_argument("--style_mapping", type=str, default="{}", help="JSON string for heading style mapping")
-    args = parser.parse_args()
+    if args is None:
+        parser = argparse.ArgumentParser()
+        parser.add_argument("--file", type=str, help="Specific PDF file to process")
+        parser.add_argument("--output_dir", type=str, default=str(PATHS.root / "data" / "03_output"), help="Output directory")
+        parser.add_argument("--style_mapping", type=str, default="{}", help="JSON string for heading style mapping")
+        args = parser.parse_args()
     
     style_mapping = {}
     try:
