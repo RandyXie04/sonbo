@@ -88,7 +88,10 @@ class _Paths:
             self.models_dir
         ]
         for d in dirs:
-            d.mkdir(parents=True, exist_ok=True)
+            try:
+                d.mkdir(parents=True, exist_ok=True)
+            except Exception as e:
+                print(f"[Settings] 無法建立目錄 {d}: {e}")
 
 @dataclass(frozen=True)
 class _AppVersion:

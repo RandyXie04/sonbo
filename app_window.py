@@ -96,8 +96,8 @@ if __name__ == '__main__':
     t = threading.Thread(target=start_server, daemon=True)
     t.start()
     
-    # // Ensure server is listening
-    wait_for_server(port, timeout=3.0)
+    # // Ensure server is listening (poll up to 15s, returns immediately once connected)
+    wait_for_server(port, timeout=15.0)
 
     # // Create native WebView2 window (Unicode escaped title for ASCII compliance)
     window = webview.create_window(

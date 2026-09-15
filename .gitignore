@@ -66,4 +66,6 @@ models/
 # PyInstaller builds & Binaries
 build/
 dist/
+bin/
 *.exe
+*.msi

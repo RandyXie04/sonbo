@@ -7,6 +7,11 @@ echo [1/3] Cleaning previous build artifacts...
 if exist "build" rd /s /q "build"
 if exist "dist" rd /s /q "dist"
 
+if not exist "bin\pandoc.exe" (
+    echo [1.5/3] Downloading pandoc binary for bundling...
+    python -c "import pypandoc; pypandoc.download_pandoc(targetfolder='bin')"
+)
+
 echo [2/3] Building executable with PyInstaller...
 python -m PyInstaller --clean build_app.spec
 
