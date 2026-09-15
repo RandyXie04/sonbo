@@ -1,0 +1,91 @@
+/* shared layout styles */
+body {
+    margin: 0 !important;
+    padding: 0 !important;
+    display: flex !important;
+    flex-direction: row !important;
+    align-items: stretch !important;
+    justify-content: flex-start !important;
+    min-height: 100vh !important;
+    height: 100vh !important;
+    overflow: hidden !important;
+    background-color: #f8fafc !important;
+    font-family: 'Segoe UI', system-ui, sans-serif !important;
+}
+
+#sidebar {
+    width: 250px !important;
+    min-width: 250px !important;
+    max-width: 250px !important;
+    flex-shrink: 0 !important;
+    background: #0f172a;
+    color: white;
+    display: flex;
+    flex-direction: column;
+    box-shadow: 2px 0 10px rgba(0,0,0,0.1);
+    height: 100vh !important;
+    position: relative;
+    z-index: 100;
+}
+
+#sidebar .brand {
+    padding: 1.5rem;
+    font-size: 1.25rem;
+    font-weight: bold;
+    border-bottom: 1px solid #1e293b;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    color: white;
+    text-decoration: none;
+}
+
+#sidebar nav {
+    flex: 1;
+    padding: 1rem 0;
+    overflow-y: auto;
+}
+
+#sidebar a.nav-link {
+    display: flex;
+    align-items: center;
+    padding: 0.8rem 1.5rem;
+    color: #cbd5e1;
+    text-decoration: none;
+    transition: all 0.2s;
+    border-left: 4px solid transparent;
+}
+
+#sidebar a.nav-link:hover {
+    background: #1e293b;
+    color: white;
+}
+
+#sidebar a.nav-link.active {
+    background: #1e293b;
+    color: #38bdf8;
+    border-left-color: #38bdf8;
+}
+
+#sidebar .nav-icon {
+    margin-right: 12px;
+    font-size: 1.2rem;
+}
+
+#main-content {
+    flex: 1 1 auto !important;
+    min-width: 0 !important;
+    height: 100vh !important;
+    overflow-y: auto !important;
+    padding: 2.5rem 3rem !important;
+    box-sizing: border-box !important;
+    display: flex !important;
+    flex-direction: column !important;
+    align-items: center !important;
+    justify-content: flex-start !important;
+}
+
+.container {
+    margin: 0 auto !important;
+    width: 100% !important;
+}

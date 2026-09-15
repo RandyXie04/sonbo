@@ -1,0 +1,69 @@
+# API and Environment variables
+.env
+.env*.local
+!.env.example
+
+# Python virtual environments
+.venv/
+venv/
+env/
+ENV/
+
+# Python cache & tooling
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.pytest_cache/
+.cache/
+
+# Agent and Prompt docs
+TASK.md
+config/RULE.md
+config/TODOTASK.md
+config/.hardware_profile.json
+
+# Logs and Debugging (新增防禦：防止敏感錯誤訊息外洩)
+*.log
+logs/
+crash_reports/
+
+# IDE & OS Files (新增防禦：防止本機絕對路徑外洩)
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+*.bak
+*.tmp
+
+# Scratch
+scratch/*
+!scratch/.gitkeep
+!scratch/README.md
+
+# Output & Intermediates (已合併重複項目)
+extracted_formulas_mfd/
+extracted_formulas_mfd-2/
+previews/
+*.zip
+debug_*.jpg
+
+# Data & PDF
+data/
+database_text/
+text_Doc/
+_archive/
+_originals/
+backup_originals/
+
+# Model weights
+*.pt
+*.pth
+*.onnx
+config/*.pt
+models/
+
+# PyInstaller builds & Binaries
+build/
+dist/
+*.exe

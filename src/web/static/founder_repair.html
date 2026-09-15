@@ -1,0 +1,205 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>方正排版標點修復</title>
+    <style>
+        :root { --primary: #16a34a; --primary-hover: #15803d; --bg: #f8fafc; --card: #ffffff; }
+        body { font-family: 'Segoe UI', sans-serif; background: var(--bg); display: flex; justify-content: center; padding: 3rem; }
+        .container { background: var(--card); padding: 2.5rem; border-radius: 16px; box-shadow: 0 10px 25px rgba(0,0,0,0.05); max-width: 600px; width: 100%; }
+        .header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 1.5rem; }
+        .header a { text-decoration: none; color: var(--primary); font-weight: bold; }
+        .upload-area { border: 2px dashed #cbd5e1; padding: 3rem; text-align: center; border-radius: 12px; cursor: pointer; margin-bottom: 1.5rem; }
+        .upload-area.dragover { border-color: var(--primary); background: #f0fdf4; }
+        .btn { background: var(--primary); color: white; border: none; padding: 12px 24px; border-radius: 8px; font-weight: bold; cursor: pointer; width: 100%; font-size: 1.1rem; }
+        .btn:disabled { background: #9ca3af; cursor: not-allowed; }
+        #status { margin-top: 1rem; text-align: center; font-weight: 500; color: #475569; }
+        #downloadBtn { display: none; background: #0284c7; margin-top: 1rem; text-align: center; text-decoration: none; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <a href="/">◀ 返回首頁</a>
+            <h2 style="margin: 0;">🛠️ 方正排版修復</h2>
+            <div style="width: 80px;"></div>
+        </div>
+        <p style="text-align: center; color: #64748b; margin-bottom: 2rem;">上傳 PDF 或 DOCX 檔案，自動還原 CMap 編碼缺陷與亂碼。</p>
+
+        <form id="uploadForm">
+            <div class="upload-area" id="dropZone">
+                <p>點擊選擇，或將 PDF / DOCX 拖曳至此</p>
+                <input type="file" id="fileInput" accept=".pdf,.docx">
+            </div>
+            <div id="fileInfo" style="text-align: center; margin-bottom: 1rem; font-weight: bold;"></div>
+            <button type="submit" class="btn" id="submitBtn" disabled>開始修復</button>
+        </form>
+        <div id="status"></div>
+        <a id="downloadBtn" class="btn" href="#">⬇️ 下載修復後的檔案</a>
+    </div>
+
+    <script>
+        const dropZone = document.getElementById('dropZone');
+        const fileInput = document.getElementById('fileInput');
+        const fileInfo = document.getElementById('fileInfo');
+        const submitBtn = document.getElementById('submitBtn');
+        const statusDiv = document.getElementById('status');
+        const downloadBtn = document.getElementById('downloadBtn');
+        let currentFile = null;
+
+        dropZone.onclick = () => fileInput.click();
+        dropZone.ondragover = (e) => { e.preventDefault(); dropZone.classList.add('dragover'); };
+        dropZone.ondragleave = () => dropZone.classList.remove('dragover');
+        dropZone.ondrop = (e) => {
+            e.preventDefault();
+            dropZone.classList.remove('dragover');
+            if (e.dataTransfer.files.length > 0) handleFile(e.dataTransfer.files[0]);
+        };
+        fileInput.onchange = (e) => {
+            if (e.target.files.length > 0) handleFile(e.target.files[0]);
+        };
+
+        function handleFile(file) {
+            currentFile = file;
+            const sizeMB = (file.size / (1024 * 1024)).toFixed(2);
+            fileInfo.innerHTML = `
+                <div style="display:flex; flex-direction:column; align-items:center; gap:5px; padding: 10px; background: #f1f5f9; border-radius: 8px;">
+                    <span style="font-size:2rem;">📄</span>
+                    <span style="color: #334155;">已選擇: <b>${file.name}</b></span>
+                    <span style="color:#64748b; font-weight:normal; font-size:0.85rem;">檔案大小: ${sizeMB} MB</span>
+                </div>`;
+            submitBtn.disabled = false;
+            downloadBtn.style.display = 'none';
+            statusDiv.textContent = '';
+        }
+
+        document.getElementById('uploadForm').onsubmit = async (e) => {
+            e.preventDefault();
+            if (!currentFile) return;
+
+            submitBtn.disabled = true;
+            statusDiv.textContent = '處理中，請稍候...';
+            downloadBtn.style.display = 'none';
+
+            const formData = new FormData();
+            formData.append('file', currentFile);
+
+            try {
+                const response = await fetch('/api/founder/repair', {
+                    method: 'POST',
+                    body: formData
+                });
+                
+                if (!response.ok) {
+                    const err = await response.json();
+                    throw new Error(err.detail || '檔案格式或內容可能有誤');
+                }
+                
+                const result = await response.json();
+                if (result.success) {
+                    statusDiv.innerHTML = `✅ <b>修復完成！</b>`;
+                    
+                    const btnContainer = document.createElement('div');
+                    btnContainer.id = 'saveBtnContainer';
+                    btnContainer.style.display = 'flex';
+                    btnContainer.style.gap = '10px';
+                    btnContainer.style.marginTop = '15px';
+                    btnContainer.style.justifyContent = 'center';
+                    
+                    const btnSave = document.createElement('button');
+                    btnSave.className = 'btn';
+                    btnSave.style.background = '#2563eb';
+                    btnSave.innerText = '📁 本機另存修復檔案 (原生視窗)';
+                    // We don't have a fallback URL for Founder Repair as it used FileResponse before,
+                    // but if it fails we can just alert the user. 
+                    btnSave.onclick = (e) => nativeSave(result.source_path, result.filename, e.currentTarget);
+                    
+                    btnContainer.appendChild(btnSave);
+                    statusDiv.appendChild(btnContainer);
+                }
+            } catch (error) {
+                statusDiv.innerHTML = `❌ <b>處理錯誤：</b>${error.message} <br><button onclick="submitBtn.click()" style="margin-top:10px; padding: 5px 10px; cursor:pointer;">🔄 重新嘗試</button>`;
+            } finally {
+                submitBtn.disabled = false;
+            }
+        };
+
+        async function nativeSave(source_path, suggested_filename, btnElement) {
+            const origText = btnElement ? btnElement.innerText : '';
+            if (btnElement) {
+                btnElement.disabled = true;
+                btnElement.innerText = '⏳ 請在開啟的視窗中選擇儲存位置...';
+            }
+            try {
+                const res = await fetch('/api/native_save_file', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({source_path, suggested_filename})
+                });
+                
+                if (!res.ok) {
+                    throw new Error(`伺服器回應異常 (${res.status})`);
+                }
+                const result = await res.json();
+                
+                if (result.status === 'success') {
+                    if (btnElement) {
+                        btnElement.innerText = `✅ 已儲存`;
+                        btnElement.disabled = false;
+                    }
+                    
+                    let saveInfoId = `savedInfo_repair`;
+                    let savedInfo = document.getElementById(saveInfoId);
+                    if (!savedInfo) {
+                        savedInfo = document.createElement('div');
+                        savedInfo.id = saveInfoId;
+                        savedInfo.style.marginTop = '0.8rem';
+                        savedInfo.style.padding = '0.8rem';
+                        savedInfo.style.background = '#f0fdf4';
+                        savedInfo.style.border = '1px solid #bbf7d0';
+                        savedInfo.style.borderRadius = '8px';
+                        savedInfo.style.color = '#166534';
+                        savedInfo.style.fontSize = '0.9rem';
+                        const container = document.getElementById('saveBtnContainer') || statusDiv;
+                        container.parentNode.insertBefore(savedInfo, container.nextSibling);
+                    }
+                    savedInfo.innerHTML = `<div><b>文件已成功儲存至：</b></div>
+                    <div style="margin:4px 0; word-break:break-all; font-family:monospace; background:#fff; padding:6px; border-radius:4px; border:1px solid #dcfce7;">${result.saved_path}</div>
+                    <button type="button" class="btn" style="margin-top:6px; padding:6px 12px; background:#15803d; color:white; font-size:0.85rem;" onclick="openSavedPath('${result.saved_path.replace(/\\/g, '\\\\')}')">📂 在 Windows 檔案總管中開啟</button>`;
+                } else if (result.status === 'cancelled') {
+                    if (btnElement) {
+                        btnElement.innerText = origText;
+                        btnElement.disabled = false;
+                    }
+                } else {
+                    alert('原生另存失敗: ' + result.message);
+                    if (btnElement) {
+                        btnElement.innerText = origText;
+                        btnElement.disabled = false;
+                    }
+                }
+            } catch(e) {
+                alert('原生另存發生錯誤: ' + e.message);
+                if (btnElement) {
+                    btnElement.innerText = origText;
+                    btnElement.disabled = false;
+                }
+            }
+        }
+
+        async function openSavedPath(filePath) {
+            try {
+                await fetch('/api/open_file_folder', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({file_path: filePath})
+                });
+            } catch(err) {
+                alert('無法開啟檔案總管: ' + err.message);
+            }
+        }
+    </script>
+<script src="/static/sidebar.js"></script>
+</body>
+</html>
