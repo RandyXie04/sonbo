@@ -52,6 +52,7 @@ debug_*.jpg
 data/
 database_text/
 text_Doc/
+issue/
 _archive/
 _originals/
 backup_originals/
