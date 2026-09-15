@@ -153,8 +153,10 @@ def main():
                 import shutil
                 shutil.move(raw_out, target_out)
 
-        if proc.returncode != 0:
+        if 'proc' in locals() and proc.returncode != 0:
             raise RuntimeError(f"RapidDoc execution failed with code {proc.returncode}")
+        elif 'proc' not in locals() and not hasattr(process_ocr, "main"):
+            raise RuntimeError("process_ocr.py is missing or empty, cannot execute RapidDoc.")
 
 if __name__ == "__main__":
     main()
