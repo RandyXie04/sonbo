@@ -91,6 +91,28 @@ def main():
     import uuid
     import re
     import tempfile
+    import json
+    
+    # 讀取人工判定方正亂碼字庫
+    correction_dict_path = _data_dir / 'Json' / 'founder_correction_dict.json'
+    founder_corrections = {}
+    if correction_dict_path.exists():
+        try:
+            with open(correction_dict_path, 'r', encoding='utf-8') as f:
+                founder_corrections = json.load(f)
+            print(f"載入方正亂碼人工判定字庫，共 {len(founder_corrections)} 筆對應。")
+        except Exception as e:
+            print(f"[Warning] 讀取 founder_correction_dict.json 失敗: {e}")
+            
+    # 準備紀錄新發現的可疑亂碼
+    suspicious_chars_file = _data_dir / '03_output' / 'suspicious_founder_chars.json'
+    suspicious_chars_set = set()
+    if suspicious_chars_file.exists():
+        try:
+            with open(suspicious_chars_file, 'r', encoding='utf-8') as f:
+                suspicious_chars_set = set(json.load(f))
+        except Exception:
+            pass
     
     for md_path in md_files:
         print(f"Converting: {md_path}")
@@ -103,6 +125,22 @@ def main():
             # Step 0: Read MD, escape numbered lists, save to isolated UUID temp file
             with open(md_path, 'r', encoding='utf-8') as f:
                 md_content = f.read()
+                
+            # 套用人工判定字庫替換 (方正排版亂碼修復)
+            if founder_corrections:
+                for bad_char, good_char in founder_corrections.items():
+                    md_content = md_content.replace(bad_char, good_char)
+            
+            # 偵測並記錄可疑的未登錄亂碼 (PUA 區塊等)
+            found_suspicious = set(re.findall(r'[\uE000-\uF8FF\uFFFD]', md_content))
+            if found_suspicious:
+                suspicious_chars_set.update(found_suspicious)
+                try:
+                    with open(suspicious_chars_file, 'w', encoding='utf-8') as f:
+                        json.dump(list(suspicious_chars_set), f, ensure_ascii=False, indent=2)
+                except Exception as e:
+                    print(f"[Warning] 寫入 suspicious_founder_chars.json 失敗: {e}")
+
             
             # Escape "1. " to "1\. " to prevent Word auto-numbering
             md_content = re.sub(r'(?m)^(\s*\d+)\.\s', r'\1\\. ', md_content)
@@ -110,10 +148,23 @@ def main():
             # 移除 OCR 產生的全形/半形 Latex 數學符號包裝，還原為純文字
             def clean_latex(m):
                 c = m.group(1)
-                c = c.replace(r'\circ', '°').replace(r'\sim', '~')
+                # 替換常見的數學指令為純文字符號
+                c = c.replace(r'\times', '×').replace(r'\div', '÷').replace(r'\pm', '±')
+                c = c.replace(r'\circ', '°').replace(r'\sim', '~').replace(r'\cdot', '·')
+                
+                # 處理 \mathrm{...} 或 \text{...} 等指令（保留其內容）
+                c = re.sub(r'\\[a-zA-Z]+\s*\{\s*(.*?)\s*\}', r'\1', c)
+                # 移除殘留的 \xxx 指令
+                c = re.sub(r'\\[a-zA-Z]+', '', c)
+                
                 c = re.sub(r'(?<=\d)\s+(?=\d)', '', c) # 移除數字間的空格
                 c = re.sub(r'\s*°\s*', '°', c)       # 移除度數符號旁的空格
-                c = re.sub(r'[\{\}\\\^$]', '', c)      # 移除 Latex 語法符號
+                
+                # 移除大括號、反斜線、錢字號等 Latex 語法符號（保留 ^ 和 _，以維持 10^-4 這種表示法）
+                c = re.sub(r'[\{\}\\\$]', '', c)
+                # 整理符號前後的空格（例如將 10 ^ - 4 整理成 10^-4）
+                c = re.sub(r'\s*([+\-^])\s*', r'\1', c)
+                
                 return re.sub(r'\s+', ' ', c).strip()
             
             md_content = re.sub(r'\\（（(.*?)）\\）', clean_latex, md_content)

@@ -391,7 +391,7 @@ def main(args=None):
             "aside_text",
         ]
     }
-    engine = RapidDoc(layout_config=layout_cfg)
+    engine = RapidDoc(layout_config=layout_cfg, pdf_pages_batch=2)
 
     output_dir = args.output_dir
     os.makedirs(output_dir, exist_ok=True)
