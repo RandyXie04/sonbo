@@ -14,6 +14,14 @@ if str(root_dir) not in sys.path:
 from config import PATHS
 
 try:
+    from src.scripts.ocr_rare_char_corrector import postprocess_ocr_markdown
+except ImportError:
+    try:
+        from scripts.ocr_rare_char_corrector import postprocess_ocr_markdown
+    except ImportError:
+        postprocess_ocr_markdown = None
+
+try:
     from rapid_doc import RapidDoc
     from rapid_doc.backend.pipeline.pipeline_middle_json_mkcontent import make_blocks_to_markdown
     from rapid_doc.utils.enum_class import MakeMode, BlockType
@@ -459,6 +467,28 @@ def main(args=None):
                     final_md = res[0].markdown if hasattr(res[0], 'markdown') else str(res[0])
                 else:
                     final_md = str(res)
+
+            # ── 生僻字後處理：靜態字典校正 + 方正亂碼修復 + 可疑字元偵測 ──
+            if postprocess_ocr_markdown is not None:
+                data_dir = str(PATHS.data_dir)
+                final_md, rare_char_stats = postprocess_ocr_markdown(
+                    markdown_text=final_md,
+                    data_dir=data_dir,
+                    pdf_name=pdf_name,
+                    output_dir=output_dir,
+                )
+                corrected = rare_char_stats.get("corrections_applied", 0)
+                suspicious = rare_char_stats.get("suspicious_chars_found", 0)
+                if corrected > 0:
+                    print(json.dumps({"progress": 82, "message": f"[INFO] 靜態字典自動修正了 {corrected} 處已知錯字。"}))
+                    sys.stdout.flush()
+                if suspicious > 0:
+                    report_path = rare_char_stats.get("report_path", "")
+                    print(json.dumps({"progress": 83, "message": f"[REVIEW] ⚠️ 偵測到 {suspicious} 處可疑字元（疑似生僻字/亂碼），覆核報告：{report_path}"}))
+                    sys.stdout.flush()
+                else:
+                    print(json.dumps({"progress": 83, "message": "[INFO] 未偵測到可疑字元，文字品質良好。"}))
+                    sys.stdout.flush()
 
             out_name = Path(pdf_path).stem + ".md"
             out_path = os.path.join(output_dir, out_name)

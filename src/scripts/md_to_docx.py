@@ -129,17 +129,64 @@ def main():
             # 套用人工判定字庫替換 (方正排版亂碼修復)
             if founder_corrections:
                 for bad_char, good_char in founder_corrections.items():
+                    if not bad_char or bad_char.startswith('_'):
+                        continue
                     md_content = md_content.replace(bad_char, good_char)
             
-            # 偵測並記錄可疑的未登錄亂碼 (PUA 區塊等)
-            found_suspicious = set(re.findall(r'[\uE000-\uF8FF\uFFFD]', md_content))
-            if found_suspicious:
-                suspicious_chars_set.update(found_suspicious)
+            # 套用 clean_founder_text 方正亂碼修復 (涵蓋彝文區 GBK 映射等)
+            try:
+                from src.founder_tools.fix_founder_fonts import clean_founder_text
+                md_content = clean_founder_text(md_content)
+            except ImportError:
                 try:
+                    from founder_tools.fix_founder_fonts import clean_founder_text
+                    md_content = clean_founder_text(md_content)
+                except ImportError:
+                    pass
+            
+            # 偵測並記錄可疑的未登錄亂碼 (擴展偵測範圍)
+            # PUA 區 + 彝文音節區 + CJK 相容區 + 替換字元 + 零寬字元
+            suspicious_pattern = re.compile(
+                r'[\uE000-\uF8FF'        # PUA 私用區
+                r'\uFFFD'                 # 替換字元 (OCR 無法辨識)
+                r'\uA000-\uA4CF'          # 彝文音節區 (方正 GBK 映射殘留)
+                r'\uF900-\uFAFF'          # CJK 相容表意文字區
+                r'\u200B-\u200D'           # 零寬字元
+                r'\uFEFF'                 # BOM 標記
+                r']'
+            )
+            found_suspicious_chars = suspicious_pattern.findall(md_content)
+            if found_suspicious_chars:
+                suspicious_chars_set.update(found_suspicious_chars)
+                
+                # 建立帶上下文的詳細記錄
+                detailed_findings = []
+                for m in suspicious_pattern.finditer(md_content):
+                    ch = m.group(0)
+                    pos = m.start()
+                    ctx_start = max(0, pos - 15)
+                    ctx_end = min(len(md_content), pos + 16)
+                    context = md_content[ctx_start:ctx_end].replace('\n', '↵')
+                    marker_pos = pos - ctx_start
+                    context_marked = context[:marker_pos] + f"【{ch}】" + context[marker_pos + 1:]
+                    detailed_findings.append({
+                        "char": ch,
+                        "unicode": f"U+{ord(ch):04X}",
+                        "context": context_marked
+                    })
+                
+                try:
+                    # 寫入簡易字元清單
                     with open(suspicious_chars_file, 'w', encoding='utf-8') as f:
                         json.dump(list(suspicious_chars_set), f, ensure_ascii=False, indent=2)
+                    # 寫入詳細上下文報告
+                    detailed_file = _data_dir / '03_output' / 'suspicious_founder_chars_detailed.json'
+                    with open(detailed_file, 'w', encoding='utf-8') as f:
+                        json.dump(detailed_findings, f, ensure_ascii=False, indent=2)
+                    print(f"[REVIEW] ⚠️ 偵測到 {len(found_suspicious_chars)} 處可疑字元，詳細報告：{detailed_file}")
                 except Exception as e:
-                    print(f"[Warning] 寫入 suspicious_founder_chars.json 失敗: {e}")
+                    print(f"[Warning] 寫入 suspicious_founder_chars 失敗: {e}")
+
 
             
             # Escape "1. " to "1\. " to prevent Word auto-numbering
