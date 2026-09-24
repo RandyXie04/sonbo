@@ -122,12 +122,13 @@ def parse_footnote_entries(text):
 
 def process_page_footnotes(page_info, page_num, previous_open_footnote, audit_records, style_mapping=None):
     """
-    Process layout blocks of a single page:
+    Process layout blocks of a single page (text & footnotes ONLY):
     1. Separate candidate footnote blocks from definite body blocks while tracking indices.
     2. Handle cross-page continuation.
     3. Match body anchors or verify strong citation characteristics.
     4. If unmatched and lacking citation semantics, preserve block in original reading order.
     5. Render page markdown with Pandoc footnotes [^n].
+    Image extraction is handled separately by pdf_image_extractor.py.
     """
     if style_mapping is None:
         style_mapping = {}
@@ -151,7 +152,7 @@ def process_page_footnotes(page_info, page_num, previous_open_footnote, audit_re
         # Criterion B: Heuristic fallback in lower 28% of page with footnote prefix
         if not is_fn and y0 > (page_h * 0.72) and b_type not in [BlockType.TITLE, BlockType.TABLE]:
             blk_txt = extract_block_text(block)
-            if re.search(r'^(?:[①-⑩\u2460-\u2473]|\[\d+\]|[⁰¹²³⁴⁵⁶⁷⁸⁹]+|注\s*\d+|\(?\d+\)\s*[\u4e00-\u9fff])', blk_txt):
+            if re.search(r'^(?:[\u2460-\u2473]|\[\d+\]|[\u2070\u00b9\u00b2\u00b3\u2074-\u2079]+|\u6ce8\s*\d+|\(?\d+\)\s*[\u4e00-\u9fff])', blk_txt):
                 is_fn = True
 
         indexed_blocks.append({
@@ -173,35 +174,46 @@ def process_page_footnotes(page_info, page_num, previous_open_footnote, audit_re
         entries = parse_footnote_entries(blk_txt)
         parsed_entries_map[fn_item["orig_idx"]] = entries
 
+    def render_blocks(blocks_with_idx):
+        rendered = []
+        try:
+            from rapid_doc.utils.enum_class import BlockType
+        except ImportError:
+            BlockType = None
+        for item in blocks_with_idx:
+            blk = item["block"]
+            b_type = blk.get("type")
+            orig_label = blk.get("original_label", "").lower()
+            is_img = (orig_label in ["image", "figure", "chart", "vision_figure"]) or (BlockType and b_type in [BlockType.IMAGE, getattr(BlockType, "FIGURE", None)])
+            
+            if is_img:
+                md_text = "![img]()"
+            else:
+                md_list = make_blocks_to_markdown([blk], MakeMode.MM_MD, img_buket_path="")
+                md_text = md_list[0] if md_list else ""
+            rendered.append({"orig_idx": item["orig_idx"], "block": blk, "md": md_text})
+        return rendered
+
     # Initial body markdown list
-    body_markdown_list = make_blocks_to_markdown(initial_body_blocks, MakeMode.MM_MD, img_buket_path="")
+    rendered_initial = render_blocks([item for item in indexed_blocks if not item["is_candidate_fn"]])
 
     # Apply Heading Detection to upgrade headings based on geometry & regex
     try:
         from src.founder_tools.core.heading_detector import HeadingDetector
-        # We assume initial_body_blocks and body_markdown_list have 1-to-1 mapping
-        for idx in range(min(len(initial_body_blocks), len(body_markdown_list))):
-            blk = initial_body_blocks[idx]
-            
-            # Skip heading detection for tables to prevent messing up markdown tables
+        for item in rendered_initial:
+            blk = item["block"]
             if blk.get("type") == BlockType.TABLE:
                 continue
 
-            md_text = body_markdown_list[idx]
-            
-            # 假設頁寬為 600 (可用實際資訊替換)
             level = HeadingDetector.detect_block_level(blk, page_width=600.0)
-            
             if level > 0:
-                # Remove existing header hashes if any
-                clean_text = md_text.lstrip('#').strip()
+                clean_text = item["md"].lstrip('#').strip()
                 prefix = '#' * level
                 custom_style = style_mapping.get(f'h{level}')
                 if custom_style:
-                    # Pandoc heading attribute syntax
-                    body_markdown_list[idx] = f"{prefix} {clean_text} {{custom-style=\"{custom_style}\"}}"
+                    item["md"] = f"{prefix} {clean_text} {{custom-style=\"{custom_style}\"}}"
                 else:
-                    body_markdown_list[idx] = f"{prefix} {clean_text}"
+                    item["md"] = f"{prefix} {clean_text}"
     except ImportError:
         pass
 
@@ -236,16 +248,16 @@ def process_page_footnotes(page_info, page_num, previous_open_footnote, audit_re
 
             matched = False
             # Check in body markdown
-            for p_idx, p_text in enumerate(body_markdown_list):
-                if marker_str and marker_str in p_text:
-                    body_markdown_list[p_idx] = p_text.replace(marker_str, fn_ref_tag, 1)
+            for p_item in rendered_initial:
+                if marker_str and marker_str in p_item["md"]:
+                    p_item["md"] = p_item["md"].replace(marker_str, fn_ref_tag, 1)
                     matched = True
                     break
                 elif MarkerDetector:
-                    detected = MarkerDetector.detect(p_text, "auto")
+                    detected = MarkerDetector.detect(p_item["md"], "auto")
                     for d in detected:
                         if d.number == fn_id:
-                            body_markdown_list[p_idx] = p_text[:d.start_char] + fn_ref_tag + p_text[d.end_char:]
+                            p_item["md"] = p_item["md"][:d.start_char] + fn_ref_tag + p_item["md"][d.end_char:]
                             matched = True
                             break
                     if matched:
@@ -265,14 +277,15 @@ def process_page_footnotes(page_info, page_num, previous_open_footnote, audit_re
                 if is_strong_citation_text(content):
                     # Genuine footnote with lost OCR superscript -> safely append reference
                     target_p_idx = -1
-                    for idx in range(len(body_markdown_list) - 1, -1, -1):
-                        if body_markdown_list[idx].strip():
+                    for idx in range(len(rendered_initial) - 1, -1, -1):
+                        if rendered_initial[idx]["md"].strip():
                             target_p_idx = idx
                             break
                     if target_p_idx >= 0:
-                        body_markdown_list[target_p_idx] = body_markdown_list[target_p_idx].rstrip() + fn_ref_tag
+                        rendered_initial[target_p_idx]["md"] = rendered_initial[target_p_idx]["md"].rstrip() + fn_ref_tag
                     else:
-                        body_markdown_list.append(fn_ref_tag)
+                        # Append a new item
+                        rendered_initial.append({"orig_idx": -1, "md": fn_ref_tag})
 
                     valid_entries_in_block.append(entry)
                     audit_records.append({
@@ -299,21 +312,21 @@ def process_page_footnotes(page_info, page_num, previous_open_footnote, audit_re
             item["is_candidate_fn"] = False
 
         # Sort all blocks by original index to ensure pristine reading order
-        final_body_blocks = [item["block"] for item in sorted(indexed_blocks, key=lambda x: x["orig_idx"]) if not item["is_candidate_fn"]]
-        
-        # Re-render complete body with preserved order
-        body_markdown_list = make_blocks_to_markdown(final_body_blocks, MakeMode.MM_MD, img_buket_path="")
+        final_body_items = sorted([item for item in indexed_blocks if not item["is_candidate_fn"]], key=lambda x: x["orig_idx"])
+        rendered_initial = render_blocks(final_body_items)
 
         # Re-apply matched footnote references to the re-rendered body
         for fn in final_footnotes:
             fn_id = fn["id"]
             marker_str = fn["raw_marker"]
             fn_ref_tag = f"[^p{page_num}_{fn_id}]"
-            for p_idx, p_text in enumerate(body_markdown_list):
-                if marker_str and marker_str in p_text:
-                    body_markdown_list[p_idx] = p_text.replace(marker_str, fn_ref_tag, 1)
+            for p_item in rendered_initial:
+                if marker_str and marker_str in p_item["md"]:
+                    p_item["md"] = p_item["md"].replace(marker_str, fn_ref_tag, 1)
                     break
 
+    # Return list of dicts: [{"orig_idx": idx, "md": text}, ...]
+    body_markdown_list = [{"orig_idx": item["orig_idx"], "md": item["md"]} for item in rendered_initial]
     return body_markdown_list, final_footnotes, new_open_footnote
 
 
@@ -373,6 +386,7 @@ def main(args=None):
         parser.add_argument("--file", type=str, help="Specific PDF file to process")
         parser.add_argument("--output_dir", type=str, default=str(PATHS.root / "data" / "03_output"), help="Output directory")
         parser.add_argument("--style_mapping", type=str, default="{}", help="JSON string for heading style mapping")
+        parser.add_argument("--image_dir", type=str, default=None, help="Directory containing pre-extracted images")
         args = parser.parse_args()
     
     style_mapping = {}
@@ -434,6 +448,7 @@ def main(args=None):
                 pdf_info_list = res.middle_json['pdf_info']
                 total_pages = len(pdf_info_list)
 
+                # ── Phase 1: Text & Footnote OCR (single responsibility) ──
                 pages_data = []
                 for page_info in pdf_info_list:
                     page_idx = page_info.get('page_idx', 0)
@@ -448,10 +463,47 @@ def main(args=None):
                         "footnotes": parsed_entries
                     })
 
-                # Second pass: Assemble final Markdown with full cross-page spliced footnotes
+                # ── Phase 2: Image Extraction (independent, decoupled) ──
+                images_dir = os.path.join(output_dir, "images")
+                image_path_map = {}  # (page_num, block_idx) -> saved path
+                try:
+                    from src.scripts.pdf_image_extractor import (
+                        collect_image_blocks_from_rapidoc,
+                        extract_pdf_images,
+                    )
+                    image_blocks = collect_image_blocks_from_rapidoc(pdf_info_list)
+                    if image_blocks:
+                        image_path_map = extract_pdf_images(
+                            pdf_path=pdf_path,
+                            image_blocks=image_blocks,
+                            output_dir=images_dir,
+                            pre_extract_dir=args.image_dir
+                        )
+                        extracted_count = len(image_path_map)
+                        print(json.dumps({"progress": 78, "message": f"[INFO] 圖片提取完成：共成功提取 {extracted_count} 張嵌入圖片（原始畫質）。"}))
+                        sys.stdout.flush()
+                except Exception as img_err:
+                    print(json.dumps({"progress": 78, "message": f"[WARN] 圖片提取模組載入或執行失敗，已跳過圖片提取：{img_err}"}))
+                    sys.stdout.flush()
+
+                # ── Assemble final Markdown (text + image placeholders replaced) ──
                 for p in pages_data:
                     p_num = p["page_num"]
-                    page_str = "\n\n".join(p["body"])
+                    # Replace image block placeholders with actual extracted image paths
+                    updated_body = []
+                    for md_dict in p["body"]:
+                        orig_idx = md_dict["orig_idx"]
+                        md_item = md_dict["md"]
+                        
+                        # image_path_map key uses original para_block index
+                        saved = image_path_map.get((p_num, orig_idx))
+                        if saved:
+                            img_rel = os.path.relpath(saved, output_dir).replace("\\", "/")
+                            img_name = os.path.basename(saved)
+                            updated_body.append(f"![{img_name}]({img_rel})")
+                        else:
+                            updated_body.append(md_item)
+                    page_str = "\n\n".join(updated_body)
                     if p["footnotes"]:
                         defs = [f"[^p{p_num}_{fn['id']}]: {fn['content']}" for fn in p["footnotes"]]
                         page_str += "\n\n" + "\n\n".join(defs)
@@ -467,6 +519,21 @@ def main(args=None):
                     final_md = res[0].markdown if hasattr(res[0], 'markdown') else str(res[0])
                 else:
                     final_md = str(res)
+
+            # ── 辭典專用語意後處理：自動降級詞條標題與楷體區隔 ──
+            try:
+                from src.scripts.dictionary_post_processor import postprocess_dictionary_markdown
+                final_md = postprocess_dictionary_markdown(final_md, style_mapping)
+                print(json.dumps({"progress": 81, "message": "[INFO] 已套用辭典專用語意修正器 (自動降級詞條標題與楷體區隔)"}))
+                sys.stdout.flush()
+            except ImportError:
+                try:
+                    from scripts.dictionary_post_processor import postprocess_dictionary_markdown
+                    final_md = postprocess_dictionary_markdown(final_md, style_mapping)
+                    print(json.dumps({"progress": 81, "message": "[INFO] 已套用辭典專用語意修正器 (自動降級詞條標題與楷體區隔)"}))
+                    sys.stdout.flush()
+                except ImportError:
+                    pass
 
             # ── 生僻字後處理：靜態字典校正 + 方正亂碼修復 + 可疑字元偵測 ──
             if postprocess_ocr_markdown is not None:

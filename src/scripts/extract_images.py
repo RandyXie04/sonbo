@@ -170,8 +170,8 @@ def extract_from_pdf(pdf_path: str, output_dir: str, to_grayscale: bool = False)
                         img_filepath = os.path.join(output_dir, img_filename)
                         try:
                             pix_mask = fitz.Pixmap(doc, smask_xref)
-                            # PNG 不支援 CMYK，若為 CMYK 或多通道需先轉 RGB 才能合成透明度
-                            if pix.n >= 5 or (pix.colorspace and pix.colorspace.n >= 4):
+                            # PNG 不支援 CMYK/DeviceN，若非 RGB/Gray 需先轉 RGB 才能合成透明度
+                            if not pix.colorspace or pix.colorspace.name not in ("DeviceRGB", "DeviceGray"):
                                 pix = fitz.Pixmap(fitz.csRGB, pix)
 
                             pix_combined = fitz.Pixmap(pix, pix_mask)
@@ -194,8 +194,8 @@ def extract_from_pdf(pdf_path: str, output_dir: str, to_grayscale: bool = False)
                     img_filename = f"page_{page_index+1:04d}_xref{xref}.png"
                     img_filepath = os.path.join(output_dir, img_filename)
                     try:
-                        # PNG 格式不支援 CMYK，若為 CMYK (colorspace.n >= 4) 或含有額外通道，需轉為 RGB
-                        if pix.n >= 5 or (pix.colorspace and pix.colorspace.n >= 4):
+                        # PNG 格式不支援 CMYK/DeviceN，若非 RGB/Gray 需轉為 RGB
+                        if not pix.colorspace or pix.colorspace.name not in ("DeviceRGB", "DeviceGray"):
                             pix = fitz.Pixmap(fitz.csRGB, pix)
                             
                         if to_grayscale:

@@ -34,6 +34,7 @@ except OSError:
 def main():
     parser = argparse.ArgumentParser(description="Convert Markdown to Word Document.")
     parser.add_argument('--files', '--target', nargs='+', help="Specific markdown files to convert")
+    parser.add_argument('--template', help="Explicit path to a .docx reference template (overrides auto-detect)")
     args = parser.parse_args()
 
     # Resolve paths relative to the data directory
@@ -44,23 +45,33 @@ def main():
     input_dir  = str(_data_dir / '03_output')
     pdf_dir    = str(_data_dir / 'database_text')
 
-    # Fallback chain for template.docx
-    _template_candidates = [
-        _data_dir / 'database_text' / 'template.docx',
-        _config_dir / 'template.docx',
-        _script_dir / 'template.docx',
-    ]
-    template_path = None
-    for _candidate in _template_candidates:
-        if _candidate.exists():
-            template_path = str(_candidate)
-            print(f"Using template: {template_path}")
-            break
+    # Fallback chain for reference template:
+    # 1. Explicit --template arg (highest priority)
+    # 2. User-uploaded user_template.docx in custom_templates/
+    # 3. Default template.docx in database_text/
+    # 4. config dir template.docx
+    # 5. script dir template.docx
+    if args.template and Path(args.template).exists():
+        template_path = args.template
+        print(f"Using template (from --template arg): {template_path}")
+    else:
+        _template_candidates = [
+            _data_dir / 'database_text' / 'custom_templates' / 'user_template.docx',  # user uploaded
+            _data_dir / 'database_text' / 'template.docx',
+            _config_dir / 'template.docx',
+            _script_dir / 'template.docx',
+        ]
+        template_path = None
+        for _candidate in _template_candidates:
+            if _candidate.exists():
+                template_path = str(_candidate)
+                print(f"Using template: {template_path}")
+                break
 
-    if template_path is None:
-        _searched = ', '.join(str(c) for c in _template_candidates)
-        print(f"Warning: template.docx not found (searched: {_searched}). "
-              "Converting without reference doc — styles may differ.")
+        if template_path is None:
+            _searched = ', '.join(str(c) for c in _template_candidates)
+            print(f"Warning: template.docx not found (searched: {_searched}). "
+                  "Converting without reference doc — styles may differ.")
         
     md_files = []
     
@@ -217,7 +228,21 @@ def main():
             md_content = re.sub(r'\\（（(.*?)）\\）', clean_latex, md_content)
             md_content = re.sub(r'\\\((.*?)\\\)', clean_latex, md_content)
 
-            
+            # 將 Markdown 中的相對圖片路徑轉為絕對路徑，確保 Pandoc 在任意工作目錄下都能找到圖檔
+            md_base_dir = os.path.dirname(os.path.abspath(md_path))
+            def _resolve_img_path(m):
+                alt_text = m.group(1)
+                img_path_raw = m.group(2)
+                # 若已是絕對路徑或網路 URL，則不處理
+                if os.path.isabs(img_path_raw) or img_path_raw.startswith(('http://', 'https://')):
+                    return m.group(0)
+                abs_img = os.path.normpath(os.path.join(md_base_dir, img_path_raw))
+                if os.path.exists(abs_img):
+                    # 使用正斜線以確保跨平台相容性
+                    return f"![{alt_text}]({abs_img.replace(os.sep, '/')})"
+                return m.group(0)
+            md_content = re.sub(r'!\[([^\]]*)\]\(([^)]+)\)', _resolve_img_path, md_content)
+
             temp_md_path = os.path.join(tempfile.gettempdir(), f"temp_{uuid.uuid4().hex}.md")
             with open(temp_md_path, 'w', encoding='utf-8') as f:
                 f.write(md_content)
@@ -235,12 +260,17 @@ def main():
             html = table_css + html
 
             # Step 2: Convert HTML to DOCX with reference doc (native table generation)
+            # 加入 --resource-path 確保 Pandoc 能解析圖片路徑並嵌入 Word
+            pandoc_extra = []
+            if template_path:
+                pandoc_extra.append(f'--reference-doc={template_path}')
+            pandoc_extra.append(f'--resource-path={md_base_dir}')
             pypandoc.convert_text(
                 html,
                 'docx',
                 format='html',
                 outputfile=out_path,
-                extra_args=([f'--reference-doc={template_path}'] if template_path else [])
+                extra_args=pandoc_extra
             )
             print(f"Saved DOCX to {out_path}")
         except Exception as e:
