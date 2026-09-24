@@ -85,9 +85,10 @@ def extract_from_docx(docx_path: str, output_dir: str, to_grayscale: bool = Fals
     return count
 
 
-def extract_from_pdf(pdf_path: str, output_dir: str, to_grayscale: bool = False) -> int:
+def extract_from_pdf(pdf_path: str, output_dir: str, to_grayscale: bool = False, duplicate_policy: str = "every_occurrence") -> int:
     """
     從 PDF (.pdf) 文件中無損提取所有圖片，支援進階的遮罩(Mask)解析、去重複與透明度合成。
+    支援 duplicate_policy: "unique" | "every_occurrence"。
     """
     os.makedirs(output_dir, exist_ok=True)
     doc = fitz.open(pdf_path)
@@ -104,7 +105,7 @@ def extract_from_pdf(pdf_path: str, output_dir: str, to_grayscale: bool = False)
             for img_info in image_list:
                 xref = img_info[0]
 
-                if xref in seen_xrefs:
+                if duplicate_policy == "unique" and xref in seen_xrefs:
                     continue
                 seen_xrefs.add(xref)
 
@@ -243,7 +244,8 @@ def process_document_images(
     file_path: str,
     output_zip_path: str,
     temp_dir: str,
-    to_grayscale: bool = False
+    to_grayscale: bool = False,
+    duplicate_policy: str = "every_occurrence"
 ) -> Tuple[int, str]:
     """
     整合處理函式：自動判斷副檔名執行提取並封裝成 ZIP。
@@ -255,7 +257,7 @@ def process_document_images(
     if ext == ".docx":
         count = extract_from_docx(file_path, temp_dir, to_grayscale=to_grayscale)
     elif ext == ".pdf":
-        count = extract_from_pdf(file_path, temp_dir, to_grayscale=to_grayscale)
+        count = extract_from_pdf(file_path, temp_dir, to_grayscale=to_grayscale, duplicate_policy=duplicate_policy)
     else:
         raise ValueError(f"不支援的檔案格式: {ext} (僅支援 .docx 與 .pdf)")
 
