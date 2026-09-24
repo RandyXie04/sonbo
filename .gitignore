@@ -22,6 +22,7 @@ TASK.md
 config/RULE.md
 config/TODOTASK.md
 config/.hardware_profile.json
+bug-fix-lab
 
 # Logs and Debugging (新增防禦：防止敏感錯誤訊息外洩)
 *.log
