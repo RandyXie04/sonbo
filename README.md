@@ -26,7 +26,7 @@
 ```text
 📦 Project Root
  ├── config/                 # ⚙️ 系統設定與開發環境規範 (settings.py, RULE.md)
- ├── skills/                 # 📚 專案專用架構與開發技能規範 (python-pdf-workbench)
+ │   └── skills/             # 🤖 AI 助手技能定義 (如 clear-project-cache 快取清理 Skill)
  ├── src/                    # 🧠 核心業務邏輯
  │   ├── core_agent.py       # 公式提取、Word 轉檔與右界中文覆核引擎
  │   ├── founder_tools/      # 樣式範本、標記偵測與啟發式標題偵測 (HeadingDetector)
