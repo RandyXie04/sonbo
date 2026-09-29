@@ -11,10 +11,10 @@ Strategy:
     - Negative / ImageMask (inverted masks → white-bg black-line TIFF)
     - CMYK colour space (→ RGB conversion for PNG compatibility)
     - SMask transparency compositing (→ RGBA PNG)
-  Then match extracted images to RapidDoc layout blocks by bounding-box overlap,
+  Then match extracted images to Surya OCR layout blocks by bounding-box overlap,
   and copy the matched images to the final output directory.
 
-This module is deliberately decoupled from the RapidDoc OCR text pipeline.
+This module is deliberately decoupled from the Surya OCR OCR text pipeline.
 It accepts simple data structures (pdf_path, list of blocks with bboxes)
 and returns a mapping of {(page_num, block_idx): saved_image_path}.
 """
@@ -84,7 +84,7 @@ def extract_pdf_images(
 
     Uses the mature extract_images.extract_from_pdf() to handle all colour-space
     edge cases (negative masks, CMYK, SMask transparency), then matches extracted
-    images to RapidDoc layout blocks by bounding-box overlap.
+    images to Surya OCR layout blocks by bounding-box overlap.
 
     Parameters
     ----------
@@ -94,9 +94,9 @@ def extract_pdf_images(
         Each dict must have:
           - "page_num"   : int  (1-indexed)
           - "block_idx"  : int  (index within that page's block list)
-          - "bbox"       : [x0, y0, x1, y1]  in RapidDoc layout coordinates
-          - "page_w"     : float  (RapidDoc page width, for coordinate scaling)
-          - "page_h"     : float  (RapidDoc page height, for coordinate scaling)
+          - "bbox"       : [x0, y0, x1, y1]  in Surya OCR layout coordinates
+          - "page_w"     : float  (Surya OCR page width, for coordinate scaling)
+          - "page_h"     : float  (Surya OCR page height, for coordinate scaling)
     output_dir : str
         Directory where extracted image files will be saved.
 
@@ -154,7 +154,7 @@ def extract_pdf_images(
                 if xref not in xref_to_file or os.path.getsize(xref_to_file[xref]) < fsize:
                     xref_to_file[xref] = filepath
 
-        # ── Phase B: Match extracted images to RapidDoc blocks via bbox overlap ──
+        # ── Phase B: Match extracted images to Surya OCR blocks via bbox overlap ──
         doc = fitz.open(pdf_path)
         try:
             # Pre-index: for each page, collect all image xrefs and their rects
@@ -258,9 +258,9 @@ def extract_pdf_images(
     return results
 
 
-def collect_image_blocks_from_rapidoc(pdf_info_list: list) -> list:
+def collect_image_blocks_from_surya(pdf_info_list: list) -> list:
     """
-    Walk RapidDoc's middle_json pdf_info list and collect all IMAGE / FIGURE blocks.
+    Walk Surya OCR's middle_json pdf_info list and collect all IMAGE / FIGURE blocks.
 
     Returns a list of dicts suitable for passing to extract_pdf_images().
     """
@@ -269,7 +269,7 @@ def collect_image_blocks_from_rapidoc(pdf_info_list: list) -> list:
     except ImportError:
         BlockType = None
 
-    IMAGE_LABELS = {"image", "figure", "chart", "vision_figure"}
+    IMAGE_LABELS = {"image", "figure", "chart", "vision_figure", "picture"}
     blocks = []
 
     for page_info in pdf_info_list:

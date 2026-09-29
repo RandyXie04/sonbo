@@ -1,4 +1,6 @@
 import os
+os.environ["RECOGNITION_MODEL_CHECKPOINT"] = "vikp/surya_rec"
+os.environ["LAYOUT_MODEL_CHECKPOINT"] = "vikp/surya_layout"
 import glob
 import sys
 import re
@@ -22,12 +24,28 @@ except ImportError:
         postprocess_ocr_markdown = None
 
 try:
-    from rapid_doc import RapidDoc
-    from rapid_doc.backend.pipeline.pipeline_middle_json_mkcontent import make_blocks_to_markdown
-    from rapid_doc.utils.enum_class import MakeMode, BlockType
-except ImportError:
-    print("rapid_doc not installed yet.")
-    RapidDoc = None
+    from surya.ocr import run_recognition
+    from surya.layout import batch_layout_detection
+    from surya.model.recognition.model import load_model as load_rec_model
+    from surya.model.recognition.processor import load_processor as load_rec_processor
+    from surya.model.detection.model import load_model as load_det_model, load_processor as load_det_processor
+    from surya.settings import settings
+    from PIL import Image
+    import fitz
+    import urllib.request
+    SURYA_AVAILABLE = True
+except Exception as e:
+    import traceback
+    traceback.print_exc()
+    print(f"Surya OCR (<0.7.0) not installed yet. Error: {e}")
+    SURYA_AVAILABLE = False
+
+def check_internet():
+    try:
+        urllib.request.urlopen('https://huggingface.co', timeout=3)
+        return True
+    except:
+        return False
 
 try:
     from src.founder_tools.core.marker_detector import MarkerDetector
@@ -42,6 +60,8 @@ def extract_block_text(block):
     """
     Extract full concatenated text content from a layout block.
     """
+    if "surya_text" in block:
+        return block["surya_text"].strip()
     text_parts = []
     for line in block.get("lines", []):
         for span in line.get("spans", []):
@@ -176,21 +196,15 @@ def process_page_footnotes(page_info, page_num, previous_open_footnote, audit_re
 
     def render_blocks(blocks_with_idx):
         rendered = []
-        try:
-            from rapid_doc.utils.enum_class import BlockType
-        except ImportError:
-            BlockType = None
         for item in blocks_with_idx:
             blk = item["block"]
-            b_type = blk.get("type")
             orig_label = blk.get("original_label", "").lower()
-            is_img = (orig_label in ["image", "figure", "chart", "vision_figure"]) or (BlockType and b_type in [BlockType.IMAGE, getattr(BlockType, "FIGURE", None)])
+            is_img = orig_label in ["image", "figure", "chart", "vision_figure", "picture"]
             
             if is_img:
                 md_text = "![img]()"
             else:
-                md_list = make_blocks_to_markdown([blk], MakeMode.MM_MD, img_buket_path="")
-                md_text = md_list[0] if md_list else ""
+                md_text = blk.get("surya_text", "")
             rendered.append({"orig_idx": item["orig_idx"], "block": blk, "md": md_text})
         return rendered
 
@@ -395,25 +409,46 @@ def main(args=None):
     except Exception:
         pass
 
-    if not RapidDoc:
-        print(json.dumps({"progress": 0, "message": "[ERROR] RapidDoc is not installed. Please run: pip install rapid-doc"}))
+    if not SURYA_AVAILABLE:
+        print(json.dumps({"progress": 0, "message": "[ERROR] Surya OCR is not installed. Please run: pip install 'surya-ocr<0.7.0' pymupdf"}))
         sys.stdout.flush()
         sys.exit(1)
+        
+    os.environ["RECOGNITION_MODEL_CHECKPOINT"] = "vikp/surya_rec"
+    os.environ["LAYOUT_MODEL_CHECKPOINT"] = "vikp/surya_layout"
+    
 
-    print(json.dumps({"progress": 5, "message": "[INFO] Initializing RapidDoc OCR engine..."}))
+    print(json.dumps({"progress": 5, "message": "[INFO] Initializing Surya OCR engine (v0.6.x)..."}))
     sys.stdout.flush()
 
-    layout_cfg = {
-        "markdown_ignore_labels": [
-            "number",
-            "header",
-            "header_image",
-            "footer",
-            "footer_image",
-            "aside_text",
-        ]
-    }
-    engine = RapidDoc(layout_config=layout_cfg, pdf_pages_batch=2)
+    if not check_internet():
+        print(json.dumps({"progress": 5, "message": "[WARN] 偵測不到網際網路連線，若為首次執行將無法下載模型！"}))
+        sys.stdout.flush()
+
+    det_processor, det_model = load_det_processor(), load_det_model()
+
+    # Monkey-patch SuryaOCRConfig to avoid KeyError with new transformers versions
+
+    from surya.model.recognition.config import SuryaOCRConfig
+    orig_init = SuryaOCRConfig.__init__
+    def patched_init(self, **kwargs):
+        encoder_config = kwargs.pop("encoder", {})
+        decoder_config = kwargs.pop("decoder", {"pad_token_id": 0, "bos_token_id": 1, "eos_token_id": 2})
+        text_encoder_config = kwargs.pop("text_encoder", {})
+        orig_init(self, encoder=encoder_config, decoder=decoder_config, text_encoder=text_encoder_config, **kwargs)
+    SuryaOCRConfig.__init__ = patched_init
+    
+    # Fix for transformers >= 4.41.0 "Multiple valid text configs were found"
+    def patched_get_text_config(self, **kwargs):
+        return self.decoder if hasattr(self, "decoder") else None
+    SuryaOCRConfig.get_text_config = patched_get_text_config
+
+
+
+    rec_model = load_rec_model()
+    rec_processor = load_rec_processor()
+    layout_model = load_det_model(checkpoint=settings.LAYOUT_MODEL_CHECKPOINT)
+    layout_processor = load_det_processor(checkpoint=settings.LAYOUT_MODEL_CHECKPOINT)
 
     output_dir = args.output_dir
     os.makedirs(output_dir, exist_ok=True)
@@ -433,20 +468,65 @@ def main(args=None):
     sys.stdout.flush()
 
     for pdf_path in pdf_files:
-        print(json.dumps({"progress": 15, "message": f"[INFO] Running RapidDoc OCR on: {os.path.basename(pdf_path)} (this may take a while...)"}))
+        print(json.dumps({"progress": 15, "message": f"[INFO] Running Surya OCR on: {os.path.basename(pdf_path)} (this may take a while...)"}))
         sys.stdout.flush()
         pdf_name = os.path.basename(pdf_path)
         try:
-            res = engine(pdf_path)
+            doc = fitz.open(pdf_path)
+            images = []
+            for page in doc:
+                pix = page.get_pixmap(dpi=150)
+                img = Image.frombytes("RGB", [pix.width, pix.height], pix.samples)
+                images.append(img)
+                
+            print(json.dumps({"progress": 20, "message": f"[INFO] Extracted {len(images)} pages. Running layout..."}))
+            sys.stdout.flush()
+            layout_results = batch_layout_detection(images, layout_model, layout_processor)
+            
+            print(json.dumps({"progress": 30, "message": f"[INFO] Running OCR..."}))
+            sys.stdout.flush()
+            # Construct bboxes for block-level OCR
+            page_bboxes = []
+            for layout in layout_results:
+                bboxes = []
+                for box in layout.bboxes:
+                    poly = box.polygon
+                    xs = [p[0] for p in poly]
+                    ys = [p[1] for p in poly]
+                    bboxes.append([min(xs), min(ys), max(xs), max(ys)])
+                page_bboxes.append(bboxes)
+                
+            ocr_results = run_recognition(images, [["zh"]] * len(images), rec_model, rec_processor, bboxes=page_bboxes)
+
+            pdf_info_list = []
+            for page_idx, (img, layout, ocr) in enumerate(zip(images, layout_results, ocr_results)):
+                para_blocks = []
+                # In surya 0.6.x, ocr_results has .text_lines which maps 1:1 if we passed bboxes
+                for box, blk in zip(layout.bboxes, ocr.text_lines):
+                    poly = box.polygon
+                    if not poly or len(poly) == 0:
+                        continue
+                    xs = [p[0] for p in poly]
+                    ys = [p[1] for p in poly]
+                    bbox = [min(xs), min(ys), max(xs), max(ys)]
+                    para_blocks.append({
+                        "original_label": box.label.lower(),
+                        "bbox": bbox,
+                        "surya_text": blk.text,
+                        "type": None
+                    })
+                pdf_info_list.append({
+                    "page_idx": page_idx,
+                    "page_size": [img.width, img.height],
+                    "para_blocks": para_blocks
+                })
 
             all_page_contents = []
             audit_records = []
             previous_open_footnote = None
-            total_pages = 0
+            total_pages = len(images)
 
-            if hasattr(res, 'middle_json') and res.middle_json and 'pdf_info' in res.middle_json:
-                pdf_info_list = res.middle_json['pdf_info']
-                total_pages = len(pdf_info_list)
+            if pdf_info_list:
 
                 # ── Phase 1: Text & Footnote OCR (single responsibility) ──
                 pages_data = []
@@ -468,10 +548,10 @@ def main(args=None):
                 image_path_map = {}  # (page_num, block_idx) -> saved path
                 try:
                     from src.scripts.pdf_image_extractor import (
-                        collect_image_blocks_from_rapidoc,
+                        collect_image_blocks_from_surya,
                         extract_pdf_images,
                     )
-                    image_blocks = collect_image_blocks_from_rapidoc(pdf_info_list)
+                    image_blocks = collect_image_blocks_from_surya(pdf_info_list)
                     if image_blocks:
                         image_path_map = extract_pdf_images(
                             pdf_path=pdf_path,
