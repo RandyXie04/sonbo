@@ -1,6 +1,5 @@
 import os
-os.environ["RECOGNITION_MODEL_CHECKPOINT"] = "vikp/surya_rec"
-os.environ["LAYOUT_MODEL_CHECKPOINT"] = "vikp/surya_layout"
+
 import glob
 import sys
 import re
@@ -442,6 +441,15 @@ def main(args=None):
     def patched_get_text_config(self, **kwargs):
         return self.decoder if hasattr(self, "decoder") else None
     SuryaOCRConfig.get_text_config = patched_get_text_config
+
+    # Fix for transformers >= 4.41.0 "AttributeError: 'Image' object has no attribute 'ndim'"
+    import surya.model.detection.processor
+    import numpy as np
+    orig_make_list = surya.model.detection.processor.make_list_of_images
+    def patched_make_list(images, *args, **kwargs):
+        images_list = orig_make_list(images, *args, **kwargs)
+        return [np.array(img) if hasattr(img, "mode") else img for img in images_list]
+    surya.model.detection.processor.make_list_of_images = patched_make_list
 
 
 
