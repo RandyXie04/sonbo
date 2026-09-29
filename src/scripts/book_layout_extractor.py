@@ -11,6 +11,8 @@ import os
 import sys
 import re
 import json
+from pathlib import Path
+
 # pyrefly: ignore [missing-import]
 import fitz
 
@@ -22,8 +24,62 @@ except ImportError:
 
 CIRCLED_MAP = {
     '①': 1, '②': 2, '③': 3, '④': 4, '⑤': 5,
-    '⑥': 6, '⑦': 7, '⑧': 8, '⑨': 9, '⑩': 10
+    '⑥': 6, '⑦': 7, '⑧': 8, '⑨': 9, '⑩': 10,
+    # Extended circled numbers ⑪–⑳ (U+246A–U+2473)
+    '⑪': 11, '⑫': 12, '⑬': 13, '⑭': 14, '⑮': 15,
+    '⑯': 16, '⑰': 17, '⑱': 18, '⑲': 19, '⑳': 20,
 }
+
+# Regex pattern matching any recognised footnote marker (circled / bracketed / numbered-dot)
+FN_MARKER_PATTERN = r'([\u2460-\u2473]|\[\d+\]|\(\d+\)|\d+\.)'
+
+
+def _circled_to_int(marker_str: str) -> int:
+    """Convert any footnote marker string to its integer index."""
+    if marker_str in CIRCLED_MAP:
+        return CIRCLED_MAP[marker_str]
+    digs = re.findall(r'\d+', marker_str)
+    return int(digs[0]) if digs else 1
+
+
+def _replace_fn_markers_in_text(text: str, page_footnotes: list, page_num: int) -> str:
+    """Replace all recognised footnote marker occurrences in *text* with Pandoc ref-tags.
+    Works for both body paragraphs and table cells."""
+    for fn in page_footnotes:
+        m_str = fn.get('marker', '')
+        if m_str and m_str in text:
+            fn_tag = f"[^p{page_num}_{fn['id']}]"
+            text = text.replace(m_str, fn_tag, 1)
+            fn['matched'] = True
+    return text
+
+
+def _table_to_markdown(table, page_footnotes: list, page_num: int) -> str:
+    """Convert a PyMuPDF Table object to a GFM Markdown table string.
+    Footnote markers inside cells are replaced with Pandoc ref-tags."""
+    try:
+        rows = table.extract()  # list[list[str|None]]
+    except Exception:
+        return ""
+    if not rows:
+        return ""
+
+    md_rows = []
+    for r_idx, row in enumerate(rows):
+        cells = []
+        for cell in row:
+            cell_text = (cell or "").replace("\n", " ").strip()
+            # Replace footnote markers inside cells
+            cell_text = _replace_fn_markers_in_text(cell_text, page_footnotes, page_num)
+            # Escape pipe characters inside cells
+            cell_text = cell_text.replace("|", "\\|")
+            cells.append(cell_text)
+        md_rows.append("| " + " | ".join(cells) + " |")
+        if r_idx == 0:
+            # Insert separator row after header
+            md_rows.append("|" + "|".join([" --- " for _ in cells]) + "|")
+
+    return "\n".join(md_rows)
 
 def clean_span_duplicates(spans):
     """Filter out duplicate spans caused by PDF shadow/fake-bold text rendering."""
@@ -141,106 +197,126 @@ def process_book_vector_pdf(pdf_path, output_dir, output_stem=None, style_mappin
         page_w = page.rect.width
         
         blocks = page.get_text("dict").get("blocks", [])
-        
-        # Step 1: Collect valid text blocks, separate header/footer
+
+        # ── Step 0: Detect tables via PyMuPDF find_tables() ──────────────────
+        # Collect table bbox regions so we can exclude their text from body_blocks.
+        page_tables = []  # list of fitz.table.Table objects
+        table_bboxes = []  # list of fitz.Rect for overlap checks
+        try:
+            tabs = page.find_tables()
+            if tabs and tabs.tables:
+                page_tables = tabs.tables
+                table_bboxes = [fitz.Rect(t.bbox) for t in page_tables]
+        except Exception:
+            pass  # find_tables() not available in older PyMuPDF – graceful fallback
+
+        def _block_overlaps_any_table(bbox_list, block_bbox):
+            """Return True if block_bbox overlaps any known table region by >30%."""
+            b = fitz.Rect(block_bbox)
+            for tr in bbox_list:
+                inter = b & tr
+                if inter.is_empty:
+                    continue
+                if inter.get_area() / max(b.get_area(), 1.0) > 0.30:
+                    return True
+            return False
+
+        # Step 1: Collect valid text blocks, separate header/footer/footnote
         body_blocks = []
         footnote_blocks = []
-        
+
         for b in blocks:
             if b.get("type") != 0:
                 continue
-            
+
             # Clean duplicate spans within lines
             for line in b.get("lines", []):
                 line["spans"] = clean_span_duplicates(line.get("spans", []))
-                
+
             block_text = "".join(s.get("text", "") for l in b.get("lines", []) for s in l.get("spans", [])).strip()
             if not block_text:
                 continue
-                
+
             if is_page_header(b, page_h, page_w):
                 audit_data["headers_removed"] += 1
                 continue
             if is_page_footer(b, page_h):
                 audit_data["footers_removed"] += 1
                 continue
-                
+
+            bbox = b.get("bbox", [0, 0, 0, 0])
+
+            # Skip blocks that belong to a detected table region
+            # (they will be rendered via _table_to_markdown instead)
+            if table_bboxes and _block_overlaps_any_table(table_bboxes, bbox):
+                continue
+
             # Check if block is in footnote area:
             # Footnotes are located near bottom of page (y >= page_h * 0.72)
             # and MUST START with a footnote marker or be an immediate continuation of one
-            bbox = b.get("bbox", [0, 0, 0, 0])
             sizes = [s.get("size", 0) for l in b.get("lines", []) for s in l.get("spans", [])]
             avg_size = sum(sizes) / len(sizes) if sizes else 10.0
-            
+
             is_fn = False
-            # Starts with footnote marker (e.g. ①, [1], (1))
-            starts_with_fn_marker = bool(re.match(r'^\s*([①-⑩\u2460-\u2473]|\[\d+\]|\(\d+\)|\d+\.)\s*', block_text))
-            
-            if bbox[1] >= page_h * 0.72 and avg_size <= 9.2:
+            # Starts with footnote marker (e.g. ①, [1], (1)) — use extended pattern
+            starts_with_fn_marker = bool(re.match(
+                r'^\s*(' + FN_MARKER_PATTERN + r')\s*', block_text
+            ))
+
+            if bbox[1] >= page_h * 0.72 and avg_size <= 9.5:
                 if starts_with_fn_marker:
                     is_fn = True
                 elif footnote_blocks:
                     # Immediate subsequent block below a footnote block with small font
                     is_fn = True
-                    
+
             if is_fn:
                 footnote_blocks.append(b)
             else:
                 body_blocks.append(b)
                 
         # Step 2: Parse footnotes on this page
-        page_footnotes = [] # list of (id, marker_str, content)
+        page_footnotes = []  # list of {id, marker, content, matched}
         current_fn_entry = None
+
         for fb in footnote_blocks:
-            fb_text = "".join(s.get("text", "") for l in fb.get("lines", []) for s in l.get("spans", [])).strip()
-            
-            # Split the block text by inline footnote markers to handle merged footnotes
-            pattern = r'([①-⑩\u2460-\u2473])'
-            parts = re.split(pattern, fb_text)
-            
-            # parts[0] is the text before the first marker
-            # If the block started with something else like \d+\.
-            m_start = re.match(r'^(\[\d+\]|\(\d+\)|\d+\.)\s*', parts[0])
+            fb_text = "".join(
+                s.get("text", "") for l in fb.get("lines", []) for s in l.get("spans", [])
+            ).strip()
+            if not fb_text:
+                continue
+
+            # Split block text by ANY recognised footnote marker
+            # This handles both circled numbers and [n] / (n) / n. styles
+            parts = re.split(FN_MARKER_PATTERN, fb_text)
+
+            # parts[0] — text before the first marker (may be empty)
+            prefix = parts[0]
+            m_start = re.match(r'^\s*' + FN_MARKER_PATTERN + r'\s*', prefix)
             if m_start:
-                marker_str = m_start.group(1).strip()
-                digs = re.findall(r'\d+', marker_str)
-                num = int(digs[0]) if digs else 1
+                # The prefix itself *is* a marker (split captured it)
+                pass  # handled below in the loop
+            elif prefix.strip():
+                # Plain continuation text before any marker
                 if current_fn_entry:
-                    page_footnotes.append(current_fn_entry)
-                current_fn_entry = {"id": num, "marker": marker_str, "content": parts[0][m_start.end():].strip()}
-            else:
-                if parts[0].strip():
-                    if current_fn_entry:
-                        current_fn_entry["content"] += (" " + parts[0].strip() if current_fn_entry["content"] else parts[0].strip())
-                    else:
-                        # Fallback if first block started without marker
-                        current_fn_entry = {"id": 1, "marker": "①", "content": parts[0].strip()}
-            
-            # Iterate through the matched inline markers and their following texts
+                    sep = " " if current_fn_entry["content"] else ""
+                    current_fn_entry["content"] += sep + prefix.strip()
+                else:
+                    # Orphaned text — treat as footnote #1 continuation
+                    current_fn_entry = {"id": 1, "marker": "", "content": prefix.strip()}
+
+            # Iterate: parts alternates [text, marker, text, marker, text ...]
             for i in range(1, len(parts), 2):
                 marker_str = parts[i].strip()
-                content_str = parts[i+1].strip()
-                
-                num = CIRCLED_MAP.get(marker_str)
-                if not num:
-                    digs = re.findall(r'\d+', marker_str)
-                    num = int(digs[0]) if digs else 1
-                
+                content_str = parts[i + 1].strip() if (i + 1) < len(parts) else ""
+
+                num = _circled_to_int(marker_str)
+
                 if current_fn_entry:
                     page_footnotes.append(current_fn_entry)
-                    
+
                 current_fn_entry = {"id": num, "marker": marker_str, "content": content_str}
-                
-        if current_fn_entry:
-            page_footnotes.append(current_fn_entry)
-                current_fn_entry = {"id": fn_id, "marker": fn_marker, "content": fn_content}
-            else:
-                # Continuation of previous footnote
-                if current_fn_entry:
-                    current_fn_entry["content"] += " " + fb_text
-                else:
-                    # Fallback if first block started without marker
-                    current_fn_entry = {"id": 1, "marker": "①", "content": fb_text}
+
         if current_fn_entry:
             page_footnotes.append(current_fn_entry)
 
@@ -378,19 +454,21 @@ def process_book_vector_pdf(pdf_path, output_dir, output_stem=None, style_mappin
                 line_str = "".join(s.get("text", "") for s in line.get("spans", [])).strip()
                 if not line_str:
                     continue
-                for fn in page_footnotes:
-                    fn_id = fn["id"]
-                    fn_tag = f"[^p{page_num}_{fn_id}]"
-                    m_str = fn["marker"]
-                    if m_str and m_str in line_str:
-                        line_str = line_str.replace(m_str, fn_tag, 1)
-                        fn["matched"] = True
+                line_str = _replace_fn_markers_in_text(line_str, page_footnotes, page_num)
                 current_para_lines.append(line_str)
                 
         # Flush any remaining body text
         flush_current_para()
-                
-        # Step 4: Handle footnotes that didn't match body marker (Fallback anchoring)
+
+        # ── Step 3b: Render detected tables (inserted in document order) ──────
+        # Tables are inserted *after* the body paragraphs gathered so far;
+        # a future improvement can sort by y-position across body+table elements.
+        for tbl in page_tables:
+            tbl_md = _table_to_markdown(tbl, page_footnotes, page_num)
+            if tbl_md:
+                page_paragraphs.append(tbl_md)
+
+        # Step 4: Handle footnotes that didn't match any body/table marker (Fallback anchoring)
         for fn in page_footnotes:
             fn_id = fn["id"]
             fn_tag = f"[^p{page_num}_{fn_id}]"
@@ -415,10 +493,10 @@ def process_book_vector_pdf(pdf_path, output_dir, output_stem=None, style_mappin
                     "status": "MATCHED (雙向匹配精準錨定)",
                     "content": fn["content"][:60]
                 })
-                
+
             # Append Pandoc footnote definition
             page_paragraphs.append(f"{fn_tag}: {fn['content']}")
-            
+
         if page_paragraphs:
             final_md_pages.append("\n\n".join(page_paragraphs))
             
