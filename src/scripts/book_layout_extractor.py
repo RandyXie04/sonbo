@@ -193,10 +193,46 @@ def process_book_vector_pdf(pdf_path, output_dir, output_stem=None, style_mappin
         current_fn_entry = None
         for fb in footnote_blocks:
             fb_text = "".join(s.get("text", "") for l in fb.get("lines", []) for s in l.get("spans", [])).strip()
-            fn_id, fn_marker, fn_content = parse_footnote_marker(fb_text)
-            if fn_id is not None and fn_marker is not None:
+            
+            # Split the block text by inline footnote markers to handle merged footnotes
+            pattern = r'([①-⑩\u2460-\u2473])'
+            parts = re.split(pattern, fb_text)
+            
+            # parts[0] is the text before the first marker
+            # If the block started with something else like \d+\.
+            m_start = re.match(r'^(\[\d+\]|\(\d+\)|\d+\.)\s*', parts[0])
+            if m_start:
+                marker_str = m_start.group(1).strip()
+                digs = re.findall(r'\d+', marker_str)
+                num = int(digs[0]) if digs else 1
                 if current_fn_entry:
                     page_footnotes.append(current_fn_entry)
+                current_fn_entry = {"id": num, "marker": marker_str, "content": parts[0][m_start.end():].strip()}
+            else:
+                if parts[0].strip():
+                    if current_fn_entry:
+                        current_fn_entry["content"] += (" " + parts[0].strip() if current_fn_entry["content"] else parts[0].strip())
+                    else:
+                        # Fallback if first block started without marker
+                        current_fn_entry = {"id": 1, "marker": "①", "content": parts[0].strip()}
+            
+            # Iterate through the matched inline markers and their following texts
+            for i in range(1, len(parts), 2):
+                marker_str = parts[i].strip()
+                content_str = parts[i+1].strip()
+                
+                num = CIRCLED_MAP.get(marker_str)
+                if not num:
+                    digs = re.findall(r'\d+', marker_str)
+                    num = int(digs[0]) if digs else 1
+                
+                if current_fn_entry:
+                    page_footnotes.append(current_fn_entry)
+                    
+                current_fn_entry = {"id": num, "marker": marker_str, "content": content_str}
+                
+        if current_fn_entry:
+            page_footnotes.append(current_fn_entry)
                 current_fn_entry = {"id": fn_id, "marker": fn_marker, "content": fn_content}
             else:
                 # Continuation of previous footnote
